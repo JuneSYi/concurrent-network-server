@@ -1,11 +1,91 @@
-use std::io::{BufRead, BufReader, Error, ErrorKind, Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
+use std::sync::{mpsc, Arc, Mutex};
 
 #[derive(Debug)]
 enum ProcessingState {
     WaitForMsg,
     InMsg,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct Worker {
+    id: usize,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    // fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Box<dyn FnOnce() + Send + 'static>>>>) -> Self {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let thread = thread::spawn(move || loop {
+            let message = receiver.lock().unwrap().recv(); // lock, then receive
+
+            match message {
+                Ok(job) => {
+                    println!("Worker {id} got a job; executing.");
+                    job();
+                }
+                Err(_) => {
+                    // Sender offline or channel is broken
+                    println!("Worker {id} disconnecting; sender offline");
+                    break;
+                }
+            }
+        });
+
+        Worker {
+            id,
+            thread: Some(thread),
+        }
+    }
+}
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Option<mpsc::Sender<Job>>,
+}
+
+impl ThreadPool {
+    pub fn new(size: usize) -> Self {
+        assert!(size > 0);
+        let (tx, rx) = mpsc::channel();
+        let rx = Arc::new(Mutex::new(rx));
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&rx)));
+        }
+
+        ThreadPool { workers, sender: Some(tx) }
+    }
+    
+    pub fn execute<F>(&self, f: F)
+    where F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+        if let Some(tx) = &self.sender {
+            if tx.send(job).is_err() {
+                eprintln!("Error: failed to send job to worker. channel may be offline");
+            }
+        }
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+            if let Some(thread) = worker.thread.take() {
+                if thread.join().is_err() {
+                    eprintln!("Error joining thread for worker {}", worker.id);
+                }
+            }
+        }
+        println!("all workers shut down");
+    }
 }
 
 pub struct Server {
@@ -22,18 +102,24 @@ impl Server {
     pub fn run(&self) -> Result<(), Error> {
         let listener = TcpListener::bind(&self.addr)?;
 
+        let poolsize = 4;
+        let pool = ThreadPool::new(poolsize);
+        println!("thread pool with {} workers created", poolsize);
+
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    let peer_addr = stream.peer_addr()?;
+                    let peer_addr = stream.peer_addr().map_or_else(
+                        |_| "unknown".to_string(),
+                        |f| f.to_string()
+                    );
                     println!("New connection accepted from: {:?}", peer_addr);
 
-                    thread::spawn(move || {
-                        println!("Thread spawned for: {peer_addr:?}");
+                    pool.execute(move || {
+                        println!("Job for {} dispatched to thread pool.", peer_addr);
                         if let Err(e) = handle_client_in_thread(stream) {
-                            eprintln!("Error handling connecion: {e}. Peer done.");
+                            eprintln!("Error handling connecion: {}: {e}", peer_addr);
                         }
-                        println!("thread for client {peer_addr:?} finished"); // thread dropped because thread now stored in a variable
                     });
                 }
                 Err(e) => {
