@@ -2,6 +2,7 @@ use std::io::{Error, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Debug)]
 enum ProcessingState {
@@ -117,8 +118,15 @@ impl Server {
 
                     pool.execute(move || {
                         println!("Job for {} dispatched to thread pool.", peer_addr);
-                        if let Err(e) = handle_client_in_thread(stream) {
-                            eprintln!("Error handling connecion: {}: {e}", peer_addr);
+                        // if let Err(e) = handle_client_in_thread(stream) {
+                        //     eprintln!("Error handling connecion: {}: {e}", peer_addr);
+                        // }
+                        
+                        // To run with TcpStream set to non-blocking mod
+                        if let Err(e) = handle_connection_non_blocking_raw(stream) {
+                            eprintln!("Error handling connecion (in non-blocking mode): {}: {e}", peer_addr);
+                        } else {
+                            println!("Peer done (non-blocking mode)");
                         }
                     });
                 }
@@ -190,3 +198,32 @@ fn handle_client_in_thread(mut stream: TcpStream) -> Result<(), Error> {
         }
     }
 }
+
+fn handle_connection_non_blocking_raw(mut stream: TcpStream) -> Result<(), Error> {
+        println!("Accepted connection. Setting to non-blocking");
+        stream.set_nonblocking(true)?;
+
+        let mut buffer = [0u8; 1024];
+
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => {
+                    println!("client disconnected gracefully");
+                    return Ok(());
+                },
+                Ok(bytes_read) => {
+                    println!("recv return {bytes_read} bytes");
+                    // for a real app, buffer processed here
+                },
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    println!("Operation would block. Sleeping for 200ms...");
+                    thread::sleep(Duration::from_millis(200));
+                    continue;
+                },
+                Err(e) => {
+                    eprintln!("Error reading from stream: {e}");
+                    return Err(e);
+                }
+            }
+        }
+    }
