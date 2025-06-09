@@ -2,7 +2,7 @@ use std::io::Error;
 use std::net::TcpListener;
 use std::thread;
 use std::sync::{mpsc, Arc, Mutex};
-use crate::handler::sync::ConnectionHandler;
+use crate::handler::sync_handler::ConnectionHandler;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
