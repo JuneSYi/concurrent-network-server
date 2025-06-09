@@ -1,5 +1,7 @@
 use std::io::{Error, ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
 use crate::protocol;
 
 #[derive(Debug)]
@@ -18,7 +20,7 @@ impl ConnectionHandler {
         ConnectionHandler { stream, state: ProcessingState::WaitForMsg }
     }
 
-    pub fn handle(mut self) -> Result<(), std::io::Error> {
+    pub fn handle(mut self) -> Result<(), Error> {
         println!("client connected. sending initial '*' character");
         self.stream.write_all(&[protocol::HANDSHAKE])?;
 
@@ -27,7 +29,7 @@ impl ConnectionHandler {
         println!("entering protocol loop. initial state: WaitForMsg");
         loop {
             // read data from stream
-            match stream.read(&mut buffer) {
+            match self.stream.read(&mut buffer) {
                 Ok(0) => {
                     // connection closed by client
                     println!("client disconnected");
@@ -60,6 +62,33 @@ impl ConnectionHandler {
                     eprintln!("this error occurred because the operation would need to block");
                     continue;
                 }
+                Err(e) => {
+                    eprintln!("Error reading from stream: {e}");
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    pub fn handle_non_blocking_raw(mut self) -> Result<(), Error> {
+        println!("Accepted connection. Setting to non-blocking");
+        self.stream.set_nonblocking(true)?;
+        let mut buffer = [0u8;1024];
+        loop {
+            match self.stream.read(&mut buffer) {
+                Ok(0) => {
+                    println!("client disconnected gracefully");
+                    return Ok(());
+                },
+                Ok(bytes_read) => {
+                    println!("recv return {bytes_read} bytes");
+                    // for a real app, buffer processed here
+                },
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                    println!("Operation would block. Sleeping for 200ms...");
+                    thread::sleep(Duration::from_millis(200));
+                    continue;
+                },
                 Err(e) => {
                     eprintln!("Error reading from stream: {e}");
                     return Err(e);
