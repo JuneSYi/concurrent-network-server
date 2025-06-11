@@ -56,7 +56,7 @@ impl AsyncConnectionHandler {
                             }
                             ProcessingState::InMsg => {
                                 if byte == protocol::PRIME_CMD {
-                                    // Collect any digits that are already present in the current buffer
+                                    println!("Client {}: Saw PRIME_CMD (‘{}’), now collecting digits…", self.peer_addr, protocol::PRIME_CMD as char);
                                     let mut digits: Vec<u8> = Vec::new();
                                     let mut end_seen = false;
                                     let mut j = idx + 1;
@@ -78,6 +78,7 @@ impl AsyncConnectionHandler {
                                     let result = spawn_blocking(move || prime::is_prime(n)).await?;
                                     let reply: &'static [u8] = if result { b"prime\n" } else { b"composite\n" };
                                     self.stream.write_all(reply).await?;
+                                    println!("Client {}: Finished prime check for {}", self.peer_addr, n);
                                     self.state = ProcessingState::WaitForMsg;
                                     break;
                                 }
