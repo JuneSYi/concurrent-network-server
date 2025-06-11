@@ -2,6 +2,7 @@
 pub const HANDSHAKE:    u8 = b'*';
 pub const START_MARKER: u8 = b'^';
 pub const END_MARKER:   u8 = b'$';
+pub const PRIME_CMD:    u8 = b'P';
 
 // returns true if this byte is the '^' start marker
 #[inline]
